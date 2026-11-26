@@ -28,9 +28,9 @@ from pathlib import Path
 # To raise one, edit it here on purpose.
 
 HARD_BUDGET_USD = 0.10      # absolute ceiling for one run
-MAX_TURNS = 20              # absolute ceiling on messages in one run
+MAX_TURNS = 40              # absolute ceiling on messages in one run
 MAX_REPLY_TOKENS = 600      # absolute ceiling on one reply's length
-HISTORY_WINDOW = 12         # each model sees only the last N messages
+HISTORY_WINDOW = 40         # each model sees only the last N messages
 
 # USD per 1M tokens, from https://openai.com/api/pricing (Nov 2026):
 #   model: (input, output, cached_input, cache_write_30m, cache_write_12h)
@@ -51,10 +51,11 @@ PRICES = {
 # max_completion_tokens, so the per-reply cap still holds for any model.
 
 DEFAULT_PERSONA = (
-    "You are {name}, an AI talking with another AI called {other} in a chat "
-    "room. No human is taking part. Be yourself, be curious, and keep each "
-    "reply short: 2-4 sentences. Don't wrap up or say goodbye unless you "
-    "really want to end the conversation."
+    "You are {name}, an AI in a chat room with another AI called {other}. "
+    "Messages starting '{other}:' are from {other}. Messages starting "
+    "'Moderator:' are from the person who set the topic; they don't take part "
+    "otherwise. Reply as yourself, without putting your name in front. "
+    "Keep each reply short: 2-4 sentences. Don't wrap up unless you really want to end."
 )
 
 # ANSI colours (switched off when output isn't a terminal)
@@ -84,13 +85,16 @@ class Agent:
         self.name, self.model = name, model
         self.system = persona.format(name=name, other=other)
 
-    def view(self, transcript: list[dict]) -> list[dict]:
-        """The chat from this agent's point of view: its lines are
-        'assistant', the other agent's lines are 'user'."""
+    def view(self, transcript):
         msgs = [{"role": "system", "content": self.system}]
         for turn in transcript[-HISTORY_WINDOW:]:
-            role = "assistant" if turn["speaker"] == self.name else "user"
-            msgs.append({"role": role, "content": turn["text"]})
+            if turn.get("failed"):
+                continue  # harness notes never reach the models
+            if turn["speaker"] == self.name:
+                msgs.append({"role": "assistant", "content": turn["text"]})
+            else:
+                msgs.append({"role": "user",
+                             "content": f'{turn["speaker"]}: {turn["text"]}'})
         return msgs
 
 
@@ -258,8 +262,11 @@ def parse_args(argv=None):
     p.add_argument("--turns", type=int, default=20)
     p.add_argument("--budget", type=float, default=0.08,
                    help=f"USD for this run (capped at {HARD_BUDGET_USD}).")
-    p.add_argument("--max-tokens", type=int, default=250,
-                   help="Longest single reply, in tokens.")
+    p.add_argument("--max-tokens", type=int, default=700,
+                   help="Longest single reply, in tokens (thinking counts too).")
+    p.add_argument("--reasoning-effort", default="low",
+                   choices=["off", "minimal", "low", "medium", "high"],
+                   help="How much hidden thinking the model may do. 'off' = don't send it.")
     p.add_argument("--pause", type=float, default=0.6,
                    help="Seconds between turns, for readability.")
     p.add_argument("--out", default="transcripts")
